@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Relatórios / planilhas geradas
+resultado_validacao.xlsx
+*.tmp
+
+# IDE / SO
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
