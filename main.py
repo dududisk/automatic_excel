@@ -78,6 +78,11 @@ TEMPO_CARREGAMENTO_SITE = 8.0  # Espera o site carregar completamente
 TEMPO_APOS_LOGIN = 3.0         # Espera após clicar em Entrar (confirma login)
 TEMPO_APOS_LOGOUT = 3.0        # Espera o retorno à tela inicial de login
 
+# Limite de usuários a processar (0 = todos). Útil para um TESTE controlado:
+# defina 1 ou 2 para validar coordenadas/tempos sem percorrer a planilha toda.
+# Também pode ser passado na linha de comando:  python main.py 2
+LIMITE_USUARIOS = 0
+
 # ===========================================================================
 # BLOCO DE CONFIGURAÇÃO — CAMINHOS E URLS
 # ===========================================================================
@@ -487,9 +492,11 @@ def salvar_relatorio(resultados):
 # ORQUESTRAÇÃO PRINCIPAL
 # ===========================================================================
 
-def executar_automacao():
+def executar_automacao(limite=LIMITE_USUARIOS):
     """
     Função principal que orquestra todo o fluxo da automação.
+
+    `limite`: quantos usuários processar (0 = todos). Útil para testes.
 
     Trata erros de forma resiliente: a falha em um usuário NÃO interrompe o
     processamento dos demais. Ao final, sempre tenta salvar o relatório.
@@ -508,6 +515,11 @@ def executar_automacao():
     if not usuarios:
         print("[AVISO] Nenhum usuário válido encontrado. Encerrando.")
         return
+
+    # Aplica o limite de teste, se definido (>0): processa só os primeiros N.
+    if limite and limite > 0:
+        usuarios = usuarios[:limite]
+        print(f"[MODO TESTE] Processando apenas {len(usuarios)} usuário(s).")
 
     # ETAPA 2 — Navegador e site.
     abrir_chrome()
@@ -572,8 +584,19 @@ def executar_automacao():
 # ===========================================================================
 
 if __name__ == "__main__":
+    import sys
+
+    # Limite opcional de usuários pela linha de comando (ex.: python main.py 2).
+    # Se não for informado, usa LIMITE_USUARIOS (0 = todos).
+    limite = LIMITE_USUARIOS
+    if len(sys.argv) > 1:
+        try:
+            limite = int(sys.argv[1])
+        except ValueError:
+            print(f"[AVISO] Argumento inválido '{sys.argv[1]}'. Ignorando.")
+
     try:
-        executar_automacao()
+        executar_automacao(limite=limite)
     except FileNotFoundError as erro:
         # Erro crítico (ex.: planilha não encontrada) — não há o que processar.
         print(f"[ERRO CRÍTICO] {erro}")
