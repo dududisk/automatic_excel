@@ -45,24 +45,27 @@ pyautogui.PAUSE = 0.5
 # ===========================================================================
 
 # Campo de Login (usuário)
-LOGIN_X = 760
-LOGIN_Y = 380
+LOGIN_X = 1929
+LOGIN_Y = 418
 
 # Campo de Senha
-SENHA_X = 760
-SENHA_Y = 440
+SENHA_X = 1928
+SENHA_Y = 508
 
-# Botão "Entrar"
+# Botão "Entrar" (não utilizado: o login é confirmado pressionando ENTER após
+# preencher a senha — ver realizar_login). Mantido aqui caso queira voltar a
+# clicar num botão no futuro.
 BOTAO_ENTRAR_X = 760
 BOTAO_ENTRAR_Y = 510
 
-# Menu do usuário (para abrir as opções de logout após o login)
+# Menu do usuário (não utilizado: o logout é feito com um único clique direto
+# no botão "Sair" — ver realizar_logout). Mantido para uso futuro.
 MENU_USUARIO_X = 1500
 MENU_USUARIO_Y = 90
 
-# Botão "Sair" / Logout
-BOTAO_SAIR_X = 1450
-BOTAO_SAIR_Y = 200
+# Botão "Sair" / Logout (clique direto que retorna à tela de login)
+BOTAO_SAIR_X = 254
+BOTAO_SAIR_Y = 360
 
 # ===========================================================================
 # BLOCO DE CONFIGURAÇÃO — TEMPOS (em segundos)
@@ -107,6 +110,26 @@ CAMINHOS_CHROME = [
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
 ]
+
+# ===========================================================================
+# BLOCO DE CONFIGURAÇÃO — TESSERACT OCR
+# ---------------------------------------------------------------------------
+# O OCR é usado em detectar_falha_login() para ler mensagens de erro na tela
+# (ex.: "Senha incorreta"). Caminhos comuns do executável no Windows.
+# ===========================================================================
+
+CAMINHOS_TESSERACT = [
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+]
+
+# Pasta local com os dados de idioma (.traineddata). Mantida no projeto para
+# não depender de permissão de administrador na pasta do Tesseract.
+TESSDATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tessdata")
+
+# Idioma do OCR (precisa do arquivo <idioma>.traineddata em TESSDATA_DIR).
+OCR_IDIOMA = "por"
 
 # Textos que, se aparecerem na tela após o login, indicam falha de autenticação.
 # Usados para classificar o status. Ajuste conforme as mensagens reais do site.
@@ -269,31 +292,86 @@ def acessar_site():
 # ETAPA 3 — LOGIN / LOGOUT
 # ===========================================================================
 
+# Cache da configuração do OCR (None = ainda não configurado).
+_ocr_pronto = None
+
+
+def configurar_ocr():
+    """
+    Configura o Tesseract OCR uma única vez (caminho do executável).
+
+    Localiza o tesseract.exe em CAMINHOS_TESSERACT e o registra no pytesseract.
+    Retorna True se o OCR está pronto para uso, False caso contrário.
+    O resultado fica em cache para não repetir a busca a cada login.
+    """
+    global _ocr_pronto
+    if _ocr_pronto is not None:
+        return _ocr_pronto
+
+    try:
+        import pytesseract
+
+        # Procura o executável do Tesseract nos caminhos conhecidos.
+        executavel = next((p for p in CAMINHOS_TESSERACT if os.path.isfile(p)),
+                          None)
+        if executavel:
+            pytesseract.pytesseract.tesseract_cmd = executavel
+
+        # Aponta o Tesseract para a pasta local de idiomas. Usamos a variável
+        # de ambiente TESSDATA_PREFIX (mais confiável no Windows que a opção
+        # --tessdata-dir, que sofre com aspas/barras ao ser dividida).
+        if os.path.isdir(TESSDATA_DIR):
+            os.environ["TESSDATA_PREFIX"] = TESSDATA_DIR
+
+        # Testa rapidamente se o Tesseract responde.
+        pytesseract.get_tesseract_version()
+        _ocr_pronto = True
+        print(f"[INFO] OCR (Tesseract) configurado: "
+              f"{executavel or 'no PATH'} | idioma={OCR_IDIOMA}")
+    except Exception as erro:
+        # Sem Tesseract/pytesseract: a automação segue sem detecção de erro.
+        _ocr_pronto = False
+        print(f"[AVISO] OCR indisponível ({erro}). Logins serão tratados como "
+              f"sucesso quando não houver exceção.")
+
+    return _ocr_pronto
+
+
 def detectar_falha_login():
     """
-    Tenta detectar mensagens de erro de autenticação na tela.
+    Tenta detectar mensagens de erro de autenticação na tela via OCR.
 
-    Usa OCR via pyautogui/pytesseract SE disponível. Caso a dependência de
-    OCR não esteja instalada, retorna None (status tratado como sucesso).
+    Tira um print da tela e procura textos como "Senha incorreta" ou
+    "Usuário inválido". Usa a pasta local de idiomas (TESSDATA_DIR), evitando
+    depender da instalação do Tesseract na pasta de Program Files.
 
     Retorna:
         "Senha incorreta"  — se identificar mensagem de senha errada
         "Usuário inválido" — se identificar mensagem de usuário inexistente
         None               — se nada for detectado (assume sucesso)
     """
+    # Se o OCR não estiver disponível, não há como classificar o erro.
+    if not configurar_ocr():
+        return None
+
     try:
-        # pytesseract é opcional. Se não estiver instalado, ignoramos o OCR.
-        import pytesseract  # noqa: F401
+        import pytesseract
+
+        # Captura a tela inteira e roda o OCR no idioma configurado. A pasta
+        # de idiomas já foi definida via TESSDATA_PREFIX em configurar_ocr().
         screenshot = pyautogui.screenshot()
-        texto = pytesseract.image_to_string(screenshot, lang="por").lower()
+        texto = pytesseract.image_to_string(
+            screenshot, lang=OCR_IDIOMA
+        ).lower()
 
         if any(t in texto for t in TEXTOS_SENHA_INCORRETA):
             return "Senha incorreta"
         if any(t in texto for t in TEXTOS_USUARIO_INVALIDO):
             return "Usuário inválido"
         return None
-    except Exception:
-        # OCR indisponível ou falhou: não conseguimos classificar o erro.
+    except Exception as erro:
+        # Falha no OCR neste ciclo: não classifica, mas não interrompe o fluxo.
+        print(f"[AVISO] Falha no OCR: {erro}")
         return None
 
 
@@ -302,7 +380,7 @@ def realizar_login(usuario):
     ETAPA 3 — Executa o login de um usuário na tela.
 
     Passos: clica no campo de login → digita → clica em senha → digita →
-    clica em Entrar → aguarda confirmação.
+    pressiona ENTER → aguarda confirmação.
 
     Retorna o STATUS resultante:
         "Login realizado com sucesso"
@@ -322,8 +400,10 @@ def realizar_login(usuario):
     limpar_campo()
     digitar_texto(senha)
 
-    # 7) Botão Entrar.
-    clicar(BOTAO_ENTRAR_X, BOTAO_ENTRAR_Y)
+    # 7) Confirma o login pressionando ENTER (em vez de clicar num botão).
+    #    Com o cursor ainda no campo de senha, o ENTER envia o formulário.
+    pyautogui.press("enter")
+    time.sleep(TEMPO_ENTRE_CLIQUES)
 
     # 8) Aguarda para confirmar se o login foi realizado.
     time.sleep(TEMPO_APOS_LOGIN)
@@ -340,13 +420,12 @@ def realizar_logout():
     """
     ETAPA 3 (continuação) — Efetua o logout e retorna à tela de login.
 
-    Abre o menu do usuário, clica em "Sair" e aguarda o retorno à tela
-    inicial. Caso o login tenha falhado, a tela já costuma estar na inicial,
-    então o clique no menu simplesmente não terá efeito (tratado com try).
+    Dá um único clique direto no botão "Sair" (BOTAO_SAIR_X/Y). Após o clique,
+    o site retorna sozinho para a tela inicial de login, pronta para o próximo
+    usuário. Eventual erro é apenas registrado (não interrompe o loop).
     """
     try:
-        # 9) Abre o menu do usuário e clica em sair.
-        clicar(MENU_USUARIO_X, MENU_USUARIO_Y)
+        # 9) Clica direto no botão "Sair".
         clicar(BOTAO_SAIR_X, BOTAO_SAIR_Y)
     except Exception as erro:
         print(f"[AVISO] Falha ao tentar logout: {erro}")

@@ -9,11 +9,30 @@ gerando um relatório final com o resultado de cada tentativa.
 pip install -r requirements.txt
 ```
 
-> O `pytesseract` + `Pillow` são **opcionais**. Eles só são usados para tentar
-> ler mensagens de erro na tela (senha incorreta / usuário inválido). Sem eles,
-> a automação ainda funciona, mas todo login sem exceção é marcado como
-> "Login realizado com sucesso". Para usar o OCR, instale também o
-> [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki).
+### OCR (detecção de "Senha incorreta" / "Usuário inválido")
+
+O robô lê a tela com OCR para classificar o resultado de cada login. Para isso
+é necessário o **motor Tesseract OCR** instalado no sistema:
+
+1. Instale o Tesseract (Windows):
+
+   ```powershell
+   winget install --id UB-Mannheim.TesseractOCR -e
+   ```
+
+   Caminho padrão esperado: `C:\Program Files\Tesseract-OCR\tesseract.exe`
+   (ajustável em `CAMINHOS_TESSERACT` no `main.py`).
+
+2. O idioma português (`por.traineddata`) já vem na pasta `tessdata/` do
+   projeto — o `main.py` a usa automaticamente via `TESSDATA_PREFIX`, sem
+   precisar de permissão de administrador.
+
+> Sem o Tesseract, a automação **continua funcionando**, mas todo login sem
+> exceção é tratado como "Login realizado com sucesso" (sem distinguir senha
+> incorreta de usuário inválido).
+>
+> ⚠️ Ajuste as listas `TEXTOS_SENHA_INCORRETA` e `TEXTOS_USUARIO_INVALIDO` no
+> `main.py` para corresponderem às mensagens reais exibidas pelo site.
 
 ## Antes de executar
 
@@ -55,6 +74,6 @@ para interromper imediatamente a automação (FailSafe do PyAutoGUI).
 
 Relatório `resultado_validacao.xlsx` na pasta definida em `RELATORIO_DIR`
 (ou `PASTA_RELATORIO`), com as colunas: **Número, Nome, Login, Status**.
-
+p
 Status possíveis: `Login realizado com sucesso`, `Senha incorreta`,
 `Usuário inválido`, `Erro inesperado`, `Interrompido pelo usuário`.
