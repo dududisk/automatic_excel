@@ -79,10 +79,15 @@ TEMPO_APOS_LOGOUT = 3.0        # Espera o retorno à tela inicial de login
 # BLOCO DE CONFIGURAÇÃO — CAMINHOS E URLS
 # ===========================================================================
 
-PASTA_PLANILHA = r"C:\Users\Medclin\Downloads\cadastrohes"
-PASTA_RELATORIO = r"C:\Users\Medclin\Downloads"
+# Os caminhos e a URL podem ser definidos por variáveis de ambiente, evitando
+# expor dados pessoais no código. Se a variável não existir, usa o valor padrão
+# genérico abaixo (ajuste para o seu ambiente antes de executar).
+#   PowerShell:  $env:PLANILHA_DIR = "C:\caminho\para\cadastrohes"
+#   CMD:         set PLANILHA_DIR=C:\caminho\para\cadastrohes
+PASTA_PLANILHA = os.environ.get("PLANILHA_DIR", r"C:\caminho\para\cadastrohes")
+PASTA_RELATORIO = os.environ.get("RELATORIO_DIR", r"C:\caminho\para\relatorios")
 NOME_RELATORIO = "resultado_validacao.xlsx"
-URL_SITE = "https://entrada.sesa.med.br"
+URL_SITE = os.environ.get("SITE_URL", "https://seu-sistema-de-login.exemplo.com")
 
 # Caminho do executável do Chrome (tentativas mais comuns no Windows).
 CAMINHOS_CHROME = [
@@ -362,7 +367,7 @@ def salvar_relatorio(resultados):
     Gera o relatório final em Excel com o resultado de cada usuário.
 
     Colunas: Número, Nome, Login, Status.
-    Salva em C:\\Users\\Medclin\\Downloads\\resultado_validacao.xlsx.
+    Salva em PASTA_RELATORIO\\resultado_validacao.xlsx.
     """
     workbook = openpyxl.Workbook()
     sheet = workbook.active

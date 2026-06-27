@@ -1,8 +1,7 @@
 # Automação de Validação de Usuários (PyAutoGUI)
 
-Automatiza o login de vários usuários de uma planilha Excel no sistema web
-`https://entrada.sesa.med.br`, gerando um relatório final com o resultado de
-cada tentativa.
+Automatiza o login de vários usuários de uma planilha Excel em um sistema web,
+gerando um relatório final com o resultado de cada tentativa.
 
 ## Instalação
 
@@ -27,9 +26,17 @@ pip install -r requirements.txt
 
    Copie os valores para o bloco `# COORDENADAS` no início de `main.py`.
 
-2. **Confira os caminhos** em `main.py`:
-   - `PASTA_PLANILHA` — pasta com o arquivo Excel de cadastros.
-   - `PASTA_RELATORIO` / `NOME_RELATORIO` — onde o relatório será salvo.
+2. **Configure os caminhos e a URL.** Por padrão são lidos de variáveis de
+   ambiente (recomendado, para não versionar dados pessoais):
+
+   ```powershell
+   $env:PLANILHA_DIR  = "C:\caminho\para\cadastrohes"
+   $env:RELATORIO_DIR = "C:\caminho\para\relatorios"
+   $env:SITE_URL      = "https://seu-sistema-de-login"
+   ```
+
+   Alternativamente, edite os valores padrão no bloco de configuração de
+   `main.py` (`PASTA_PLANILHA`, `PASTA_RELATORIO`, `URL_SITE`).
 
 3. **Ajuste os tempos** (`TEMPO_*`) conforme a velocidade da sua máquina/rede.
 
@@ -46,8 +53,8 @@ para interromper imediatamente a automação (FailSafe do PyAutoGUI).
 
 ## Saída
 
-Relatório `resultado_validacao.xlsx` em `C:\Users\Medclin\Downloads\` com as
-colunas: **Número, Nome, Login, Status**.
+Relatório `resultado_validacao.xlsx` na pasta definida em `RELATORIO_DIR`
+(ou `PASTA_RELATORIO`), com as colunas: **Número, Nome, Login, Status**.
 
 Status possíveis: `Login realizado com sucesso`, `Senha incorreta`,
 `Usuário inválido`, `Erro inesperado`, `Interrompido pelo usuário`.
