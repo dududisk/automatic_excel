@@ -6,6 +6,9 @@ __pycache__/
 venv/
 env/
 
+# Configuração local com dados reais (caminhos, URL) — NÃO versionar
+config_local.py
+
 # Relatórios / planilhas geradas
 resultado_validacao.xlsx
 *.tmp

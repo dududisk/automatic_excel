@@ -79,15 +79,27 @@ TEMPO_APOS_LOGOUT = 3.0        # Espera o retorno à tela inicial de login
 # BLOCO DE CONFIGURAÇÃO — CAMINHOS E URLS
 # ===========================================================================
 
-# Os caminhos e a URL podem ser definidos por variáveis de ambiente, evitando
-# expor dados pessoais no código. Se a variável não existir, usa o valor padrão
-# genérico abaixo (ajuste para o seu ambiente antes de executar).
-#   PowerShell:  $env:PLANILHA_DIR = "C:\caminho\para\cadastrohes"
-#   CMD:         set PLANILHA_DIR=C:\caminho\para\cadastrohes
-PASTA_PLANILHA = os.environ.get("PLANILHA_DIR", r"C:\caminho\para\cadastrohes")
-PASTA_RELATORIO = os.environ.get("RELATORIO_DIR", r"C:\caminho\para\relatorios")
+# Valores PADRÃO genéricos (estes ficam no repositório público, sem dados reais).
+# A configuração real fica em "config_local.py" — um arquivo IGNORADO pelo Git
+# (ver .gitignore), que NÃO é enviado ao GitHub. Assim os dados de caminho/site
+# permanecem apenas na sua máquina. Veja "config_local.example.py" como modelo.
+PASTA_PLANILHA = r"C:\caminho\para\cadastrohes"
+PASTA_RELATORIO = r"C:\caminho\para\relatorios"
 NOME_RELATORIO = "resultado_validacao.xlsx"
-URL_SITE = os.environ.get("SITE_URL", "https://seu-sistema-de-login.exemplo.com")
+URL_SITE = "https://seu-sistema-de-login.exemplo.com"
+
+# Sobrescreve os valores acima com os dados reais do arquivo local, se existir.
+# Ordem de precedência: config_local.py  >  variável de ambiente  >  padrão.
+try:
+    import config_local  # arquivo local não versionado
+    PASTA_PLANILHA = getattr(config_local, "PASTA_PLANILHA", PASTA_PLANILHA)
+    PASTA_RELATORIO = getattr(config_local, "PASTA_RELATORIO", PASTA_RELATORIO)
+    URL_SITE = getattr(config_local, "URL_SITE", URL_SITE)
+except ImportError:
+    # Sem config_local.py: tenta variáveis de ambiente (também não versionadas).
+    PASTA_PLANILHA = os.environ.get("PLANILHA_DIR", PASTA_PLANILHA)
+    PASTA_RELATORIO = os.environ.get("RELATORIO_DIR", PASTA_RELATORIO)
+    URL_SITE = os.environ.get("SITE_URL", URL_SITE)
 
 # Caminho do executável do Chrome (tentativas mais comuns no Windows).
 CAMINHOS_CHROME = [
