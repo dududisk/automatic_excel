@@ -9,6 +9,9 @@ env/
 # Configuração local com dados reais (caminhos, URL) — NÃO versionar
 config_local.py
 
+# Prints/textos de depuração do OCR (podem conter dados de tela)
+debug_ocr/
+
 # Relatórios / planilhas geradas
 resultado_validacao.xlsx
 *.tmp

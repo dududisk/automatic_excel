@@ -136,11 +136,29 @@ TESSDATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tessdat
 # Idioma do OCR (precisa do arquivo <idioma>.traineddata em TESSDATA_DIR).
 OCR_IDIOMA = "por"
 
-# Textos que, se aparecerem na tela após o login, indicam falha de autenticação.
-# Usados para classificar o status. Ajuste conforme as mensagens reais do site.
+# --- Classificação do resultado do login (por OCR da tela) ---------------------
+#
+# A detecção agora é POSITIVA: o login só é considerado bem-sucedido se a tela
+# mostrar algum sinal de que o usuário ESTÁ logado (TEXTOS_LOGIN_OK). Caso
+# contrário, é tratado como falha — assim um login que deu errado não é mais
+# marcado como sucesso por engano.
+#
+# TEXTOS_LOGIN_OK: palavras que aparecem SÓ depois de logar (ex.: o botão
+# "Sair", o nome do usuário, "Bem-vindo"). Ajuste conforme o site real.
+TEXTOS_LOGIN_OK = ["sair", "bem-vindo", "bem vindo", "logout"]
+
+# Textos de erro específicos — usados apenas para detalhar o motivo da falha.
 TEXTOS_SENHA_INCORRETA = ["senha incorreta", "senha inválida", "senha invalida"]
 TEXTOS_USUARIO_INVALIDO = ["usuário inválido", "usuario invalido",
-                           "usuário não encontrado", "usuario nao encontrado"]
+                           "usuário não encontrado", "usuario nao encontrado",
+                           "usuário ou senha", "usuario ou senha"]
+
+# Modo de depuração do OCR: se True, salva um print da tela e o texto lido a
+# cada tentativa de login na pasta "debug_ocr/". Útil para descobrir os textos
+# reais do site e calibrar TEXTOS_LOGIN_OK / TEXTOS_* acima.
+MODO_DEBUG_OCR = True
+PASTA_DEBUG_OCR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "debug_ocr")
 
 
 # ===========================================================================
@@ -342,20 +360,15 @@ def configurar_ocr():
     return _ocr_pronto
 
 
-def detectar_falha_login():
+def ler_tela(rotulo_debug=""):
     """
-    Tenta detectar mensagens de erro de autenticação na tela via OCR.
+    Captura a tela e retorna o texto lido por OCR (em minúsculas).
 
-    Tira um print da tela e procura textos como "Senha incorreta" ou
-    "Usuário inválido". Usa a pasta local de idiomas (TESSDATA_DIR), evitando
-    depender da instalação do Tesseract na pasta de Program Files.
+    Se MODO_DEBUG_OCR estiver ativo, salva também o print (.png) e o texto
+    (.txt) na pasta debug_ocr/, para ajudar a calibrar os textos de detecção.
 
-    Retorna:
-        "Senha incorreta"  — se identificar mensagem de senha errada
-        "Usuário inválido" — se identificar mensagem de usuário inexistente
-        None               — se nada for detectado (assume sucesso)
+    Retorna o texto lido, ou None se o OCR não estiver disponível/falhar.
     """
-    # Se o OCR não estiver disponível, não há como classificar o erro.
     if not configurar_ocr():
         return None
 
@@ -365,19 +378,60 @@ def detectar_falha_login():
         # Captura a tela inteira e roda o OCR no idioma configurado. A pasta
         # de idiomas já foi definida via TESSDATA_PREFIX em configurar_ocr().
         screenshot = pyautogui.screenshot()
-        texto = pytesseract.image_to_string(
-            screenshot, lang=OCR_IDIOMA
-        ).lower()
+        texto = pytesseract.image_to_string(screenshot, lang=OCR_IDIOMA).lower()
 
-        if any(t in texto for t in TEXTOS_SENHA_INCORRETA):
-            return "Senha incorreta"
-        if any(t in texto for t in TEXTOS_USUARIO_INVALIDO):
-            return "Usuário inválido"
-        return None
+        # Depuração: salva print + texto lido para inspeção posterior.
+        if MODO_DEBUG_OCR:
+            try:
+                os.makedirs(PASTA_DEBUG_OCR, exist_ok=True)
+                # Mantém só caracteres seguros para nome de arquivo.
+                nome = "".join(c if c.isalnum() or c in "-_" else "_"
+                               for c in (rotulo_debug or "tela"))
+                base = os.path.join(PASTA_DEBUG_OCR, nome)
+                screenshot.save(base + ".png")
+                with open(base + ".txt", "w", encoding="utf-8") as arq:
+                    arq.write(texto)
+                print(f"    [debug] OCR salvo em: {base}.png / .txt")
+            except Exception as erro_dbg:
+                print(f"    [debug] Falha ao salvar debug do OCR: {erro_dbg}")
+
+        return texto
     except Exception as erro:
-        # Falha no OCR neste ciclo: não classifica, mas não interrompe o fluxo.
         print(f"[AVISO] Falha no OCR: {erro}")
         return None
+
+
+def classificar_login(texto):
+    """
+    Classifica o resultado do login a partir do texto lido na tela.
+
+    Detecção POSITIVA: só retorna sucesso se houver um sinal de que o usuário
+    está logado (TEXTOS_LOGIN_OK). Caso contrário, retorna uma falha — evitando
+    marcar como sucesso um login que na verdade deu errado.
+
+    Retorna um dos status:
+        "Login realizado com sucesso"
+        "Senha incorreta"
+        "Usuário inválido"
+        "Falha no login"            (falhou, sem motivo específico identificado)
+        "Não foi possível verificar" (OCR indisponível — não dá para afirmar)
+    """
+    # Sem OCR não é possível afirmar nada com segurança.
+    if texto is None:
+        return "Não foi possível verificar"
+
+    # 1) Erros específicos têm prioridade (detalham o motivo).
+    if any(t in texto for t in TEXTOS_SENHA_INCORRETA):
+        return "Senha incorreta"
+    if any(t in texto for t in TEXTOS_USUARIO_INVALIDO):
+        return "Usuário inválido"
+
+    # 2) Sinal positivo de que está logado → sucesso.
+    if any(t in texto for t in TEXTOS_LOGIN_OK):
+        return "Login realizado com sucesso"
+
+    # 3) Nenhum sinal de login → considera falha (não assume sucesso).
+    return "Falha no login"
 
 
 def realizar_login(usuario):
@@ -387,10 +441,9 @@ def realizar_login(usuario):
     Passos: clica no campo de login → digita → clica em senha → digita →
     pressiona ENTER → aguarda confirmação.
 
-    Retorna o STATUS resultante:
-        "Login realizado com sucesso"
-        "Senha incorreta"
-        "Usuário inválido"
+    Retorna o STATUS resultante (ver classificar_login):
+        "Login realizado com sucesso" / "Senha incorreta" /
+        "Usuário inválido" / "Falha no login" / "Não foi possível verificar"
     """
     login = usuario["login"]
     senha = usuario["senha"]
@@ -413,12 +466,10 @@ def realizar_login(usuario):
     # 8) Aguarda para confirmar se o login foi realizado.
     time.sleep(TEMPO_APOS_LOGIN)
 
-    # Verifica se há mensagem de erro de autenticação na tela.
-    falha = detectar_falha_login()
-    if falha:
-        return falha
-
-    return "Login realizado com sucesso"
+    # 9) Lê a tela por OCR e classifica o resultado de forma POSITIVA:
+    #    só é sucesso se houver sinal de que está logado.
+    texto = ler_tela(rotulo_debug=f"login_{login}")
+    return classificar_login(texto)
 
 
 def realizar_logout():
