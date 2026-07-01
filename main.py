@@ -18,11 +18,13 @@ Requisitos: Python 3.12+, pyautogui, openpyxl, pyperclip, pygetwindow.
 import os
 import time
 import glob
+import traceback
 import subprocess
 
 import pyautogui
 import pyperclip
 import openpyxl
+import pygetwindow as gw
 
 # ---------------------------------------------------------------------------
 # CONFIGURAÇÃO DE SEGURANÇA DO PYAUTOGUI
@@ -165,6 +167,51 @@ PASTA_DEBUG_OCR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # FUNÇÕES AUXILIARES REUTILIZÁVEIS
 # ===========================================================================
 
+class JanelaErradaError(Exception):
+    """Levantada quando o Chrome NÃO está em foco antes de uma ação sensível."""
+
+
+def chrome_em_foco():
+    """Retorna True se a janela ativa parece ser o Google Chrome."""
+    try:
+        ativa = gw.getActiveWindow()
+        return bool(ativa) and "chrome" in (ativa.title or "").lower()
+    except Exception:
+        return False
+
+
+def garantir_chrome_em_foco():
+    """
+    Garante que o Google Chrome esteja em primeiro plano.
+
+    Se já estiver em foco, retorna True. Senão, tenta trazê-lo para frente uma
+    vez e revalida. Retorna False se não conseguir — sinal para NÃO digitar,
+    evitando que login/senha vão para o app errado (ex.: editor de código).
+    """
+    if chrome_em_foco():
+        return True
+    try:
+        janelas = [w for w in gw.getAllWindows()
+                   if "chrome" in (w.title or "").lower()]
+        if janelas:
+            janela = janelas[0]
+            if getattr(janela, "isMinimized", False):
+                janela.restore()
+            janela.activate()
+            time.sleep(0.4)
+    except Exception as erro:
+        print(f"[AVISO] Não foi possível ativar o Chrome: {erro}")
+    return chrome_em_foco()
+
+
+def _exigir_chrome():
+    """Barreira de segurança: aborta a ação se o Chrome não estiver em foco."""
+    if not chrome_em_foco() and not garantir_chrome_em_foco():
+        raise JanelaErradaError(
+            "Chrome não está em foco — ação de digitação/limpeza abortada."
+        )
+
+
 def clicar(x, y, pausa=TEMPO_ENTRE_CLIQUES):
     """Clica em uma coordenada da tela e aguarda uma pausa curta."""
     pyautogui.click(x, y)
@@ -175,17 +222,31 @@ def digitar_texto(texto, pausa=TEMPO_ENTRE_CLIQUES):
     """
     Digita um texto usando a área de transferência (pyperclip + Ctrl+V).
 
-    Esse método é mais confiável que pyautogui.write() para textos longos
-    ou com caracteres especiais/acentos, evitando problemas de layout de
-    teclado.
+    Só digita se o Chrome estiver em foco (evita colar credenciais no lugar
+    errado). Limpa a área de transferência ao final (a senha não fica retida
+    no clipboard do sistema).
     """
-    pyperclip.copy(texto)
-    pyautogui.hotkey("ctrl", "v")
-    time.sleep(pausa)
+    _exigir_chrome()  # não cola nada se o Chrome não estiver em primeiro plano
+    try:
+        pyperclip.copy(texto)
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(pausa)
+    finally:
+        # Remove o dado sensível da área de transferência.
+        try:
+            pyperclip.copy("")
+        except Exception:
+            pass
 
 
 def limpar_campo():
-    """Seleciona tudo (Ctrl+A) e apaga o conteúdo de um campo de texto."""
+    """
+    Seleciona tudo (Ctrl+A) e apaga o conteúdo de um campo de texto.
+
+    Protegido por _exigir_chrome(): sem o Chrome em foco, NÃO executa o
+    Ctrl+A/Delete — que, no app errado, apagaria conteúdo indevidamente.
+    """
+    _exigir_chrome()
     pyautogui.hotkey("ctrl", "a")
     pyautogui.press("delete")
 
@@ -207,10 +268,17 @@ def localizar_arquivo_excel():
     for padrao in padroes:
         arquivos.extend(glob.glob(padrao))
 
+    # Ignora arquivos temporários/de lock do Excel (ex.: ~$planilha.xlsx).
+    arquivos = [a for a in arquivos
+                if not os.path.basename(a).startswith("~$")]
+
     if not arquivos:
         raise FileNotFoundError(
             f"Nenhum arquivo Excel encontrado em: {PASTA_PLANILHA}"
         )
+    if len(arquivos) > 1:
+        print(f"[AVISO] Múltiplos arquivos Excel encontrados; usando: "
+              f"{arquivos[0]}")
     # Retorna o primeiro (espera-se um único arquivo na pasta).
     return arquivos[0]
 
@@ -247,11 +315,17 @@ def ler_usuarios(caminho_planilha):
 
     usuarios = []
     # min_row=2 pula o cabeçalho. iter_rows percorre até o fim dos dados.
-    for linha in sheet.iter_rows(min_row=2, values_only=True):
+    for numero_linha, linha in enumerate(
+            sheet.iter_rows(min_row=2, values_only=True), start=2):
         # Considera vazia a linha em que TODAS as células são None/"".
         if linha is None or all(
             celula is None or str(celula).strip() == "" for celula in linha
         ):
+            # Encerra na primeira linha vazia (conforme especificado). Avisa
+            # para o operador auditar caso haja usuários após essa linha.
+            print(f"[AVISO] Linha vazia na linha {numero_linha} — leitura "
+                  f"encerrada. Usuários após essa linha (se houver) serão "
+                  f"ignorados.")
             break  # linha completamente vazia → encerra a leitura
 
         numero = linha[0] if len(linha) > 0 else ""
@@ -354,8 +428,9 @@ def configurar_ocr():
     except Exception as erro:
         # Sem Tesseract/pytesseract: a automação segue sem detecção de erro.
         _ocr_pronto = False
-        print(f"[AVISO] OCR indisponível ({erro}). Logins serão tratados como "
-              f"sucesso quando não houver exceção.")
+        print(f"[AVISO] OCR indisponível ({erro}). Sem OCR não é possível "
+              f"confirmar o login: os status ficarão como "
+              f"'Não foi possível verificar'.")
 
     return _ocr_pronto
 
@@ -420,15 +495,17 @@ def classificar_login(texto):
     if texto is None:
         return "Não foi possível verificar"
 
-    # 1) Erros específicos têm prioridade (detalham o motivo).
+    # 1) Sinal positivo de que está logado tem prioridade. Assim, texto de
+    #    ajuda/rodapé como "trocar usuário ou senha" numa tela logada não gera
+    #    falso erro (o "Sair" presente confirma o sucesso).
+    if any(t in texto for t in TEXTOS_LOGIN_OK):
+        return "Login realizado com sucesso"
+
+    # 2) Sem sinal de sucesso: tenta detalhar o motivo da falha.
     if any(t in texto for t in TEXTOS_SENHA_INCORRETA):
         return "Senha incorreta"
     if any(t in texto for t in TEXTOS_USUARIO_INVALIDO):
         return "Usuário inválido"
-
-    # 2) Sinal positivo de que está logado → sucesso.
-    if any(t in texto for t in TEXTOS_LOGIN_OK):
-        return "Login realizado com sucesso"
 
     # 3) Nenhum sinal de login → considera falha (não assume sucesso).
     return "Falha no login"
@@ -447,6 +524,13 @@ def realizar_login(usuario):
     """
     login = usuario["login"]
     senha = usuario["senha"]
+
+    # 0) SEGURANÇA: garante o Chrome em primeiro plano ANTES de qualquer clique
+    #    ou digitação. Sem isso, credenciais poderiam ir para o app errado.
+    if not garantir_chrome_em_foco():
+        print("[ERRO] Chrome não está em foco. Pulando usuário para não "
+              "digitar credenciais no lugar errado.")
+        return "Janela incorreta"
 
     # 1-4) Campo de login e digitação.
     clicar(LOGIN_X, LOGIN_Y)
@@ -484,7 +568,10 @@ def realizar_logout():
         # 9) Clica direto no botão "Sair".
         clicar(BOTAO_SAIR_X, BOTAO_SAIR_Y)
     except Exception as erro:
-        print(f"[AVISO] Falha ao tentar logout: {erro}")
+        # Se o clique falhar, força o reload da URL como fallback garantido,
+        # evitando deixar a sessão anterior ativa para o próximo usuário.
+        print(f"[AVISO] Falha ao tentar logout: {erro}. Forçando reload da URL.")
+        voltar_tela_inicial()
 
     # 10) Aguarda o retorno para a tela inicial de login.
     time.sleep(TEMPO_APOS_LOGOUT)
@@ -494,9 +581,14 @@ def voltar_tela_inicial():
     """
     Garante que o navegador esteja de volta na tela inicial de login.
 
-    Útil quando o login falha: recarrega a URL para um estado limpo antes
-    do próximo usuário.
+    Recarrega a URL para um estado limpo antes do próximo usuário. Só age se
+    o Chrome estiver em foco (senão o Ctrl+L/digitação iria para o app errado).
     """
+    if not garantir_chrome_em_foco():
+        print("[AVISO] Chrome não está em foco; não foi possível recarregar a "
+              "tela de login.")
+        return
+
     # Foca a barra de endereços (Ctrl+L), digita a URL e pressiona Enter.
     pyautogui.hotkey("ctrl", "l")
     time.sleep(0.3)
@@ -607,9 +699,20 @@ def executar_automacao(limite=LIMITE_USUARIOS):
             })
             break
 
+        except JanelaErradaError as erro:
+            # Chrome perdeu o foco no meio da digitação: interrompe este usuário
+            # sem digitar em lugar errado e tenta recuperar a tela.
+            print(f"[ERRO] {erro}")
+            status = "Janela incorreta"
+            try:
+                voltar_tela_inicial()
+            except Exception:
+                pass
+
         except Exception as erro:
-            # Qualquer outra exceção: registra e CONTINUA para o próximo.
+            # Qualquer outra exceção: registra COM traceback e CONTINUA.
             print(f"[ERRO] Exceção inesperada: {erro}")
+            traceback.print_exc()
             status = "Erro inesperado"
             # Tenta recuperar o estado voltando à tela inicial.
             try:

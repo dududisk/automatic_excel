@@ -17,6 +17,7 @@ Você pode rodar o script em duas etapas, ou logar manualmente uma vez para
 deixar esses elementos visíveis enquanto captura.
 """
 
+import os
 import time
 
 import pyautogui
@@ -116,8 +117,11 @@ def main():
     print("=" * 64)
     print(bloco)
 
-    # Salva também em arquivo para consulta posterior.
-    caminho_saida = "coordenadas_capturadas.txt"
+    # Salva também em arquivo para consulta posterior (caminho absoluto ao
+    # lado deste script, independente do diretório de trabalho atual).
+    caminho_saida = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "coordenadas_capturadas.txt")
     with open(caminho_saida, "w", encoding="utf-8") as arquivo:
         arquivo.write(bloco)
     print(f"[INFO] Coordenadas salvas em: {caminho_saida}")
