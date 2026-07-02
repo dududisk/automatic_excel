@@ -66,8 +66,8 @@ MENU_USUARIO_X = 1500
 MENU_USUARIO_Y = 90
 
 # Botão "Sair" / Logout (clique direto que retorna à tela de login)
-BOTAO_SAIR_X = 254
-BOTAO_SAIR_Y = 360
+BOTAO_SAIR_X = 249
+BOTAO_SAIR_Y = 358
 
 # ===========================================================================
 # BLOCO DE CONFIGURAÇÃO — TEMPOS (em segundos)
@@ -79,6 +79,11 @@ TEMPO_ENTRE_CLIQUES = 0.8      # Pausa curta entre cliques/digitações
 TEMPO_CARREGAMENTO_SITE = 8.0  # Espera o site carregar completamente
 TEMPO_APOS_LOGIN = 3.0         # Espera após clicar em Entrar (confirma login)
 TEMPO_APOS_LOGOUT = 3.0        # Espera o retorno à tela inicial de login
+
+# O botão "Sair" pode demorar a ficar clicável (loader/overlay que varia entre
+# sessões) ou o clique pode não surtir efeito de imediato (condição de corrida).
+LOGOUT_TENTATIVAS = 3          # nº de tentativas de logout antes de desistir
+TEMPO_ENTRE_TENTATIVAS = 2.0   # espera entre as tentativas (overlay sumir)
 
 # Limite de usuários a processar (0 = todos). Útil para um TESTE controlado:
 # defina 1 ou 2 para validar coordenadas/tempos sem percorrer a planilha toda.
@@ -476,6 +481,70 @@ def ler_tela(rotulo_debug=""):
         return None
 
 
+def texto_na_regiao(x, y, raio=100):
+    """
+    Lê por OCR apenas a região quadrada ao redor de (x, y).
+
+    Usada para verificar se um elemento (ex.: botão "Sair") está realmente
+    visível na coordenada antes de clicar — um loader/overlay/modal pode
+    estar cobrindo o botão. Retorna o texto em minúsculas, ou None se o OCR
+    estiver indisponível/falhar.
+    """
+    if not configurar_ocr():
+        return None
+    try:
+        import pytesseract
+        esquerda, topo = max(0, x - raio), max(0, y - raio)
+        img = pyautogui.screenshot(region=(esquerda, topo, raio * 2, raio * 2))
+        return pytesseract.image_to_string(img, lang=OCR_IDIOMA).lower()
+    except Exception as erro:
+        print(f"[AVISO] Falha no OCR da região: {erro}")
+        return None
+
+
+def localizar_texto_na_tela(palavra):
+    """
+    Procura uma palavra exata na tela via OCR e retorna o centro (x, y) dela.
+
+    Fallback para quando o elemento não está na coordenada fixa (o layout
+    pode variar entre estados de login). Retorna None se não encontrar.
+    """
+    if not configurar_ocr():
+        return None
+    try:
+        import pytesseract
+        img = pyautogui.screenshot()
+        dados = pytesseract.image_to_data(
+            img, lang=OCR_IDIOMA, output_type=pytesseract.Output.DICT)
+        for i, txt in enumerate(dados["text"]):
+            if (txt or "").strip().lower() == palavra:
+                x = dados["left"][i] + dados["width"][i] // 2
+                y = dados["top"][i] + dados["height"][i] // 2
+                return x, y
+    except Exception as erro:
+        print(f"[AVISO] Falha ao localizar texto na tela: {erro}")
+    return None
+
+
+def salvar_evidencia_falha(rotulo):
+    """
+    Salva um print da tela atual em debug_ocr/ como evidência de falha.
+
+    Como a automação é por imagem (sem acesso ao DOM), a evidência
+    equivalente ao "HTML do elemento" é a captura visual da tela no momento
+    da falha, com carimbo de data/hora para não sobrescrever ocorrências.
+    """
+    try:
+        os.makedirs(PASTA_DEBUG_OCR, exist_ok=True)
+        nome = "".join(c if c.isalnum() or c in "-_" else "_" for c in rotulo)
+        carimbo = time.strftime("%Y%m%d_%H%M%S")
+        caminho = os.path.join(PASTA_DEBUG_OCR, f"{nome}_{carimbo}.png")
+        pyautogui.screenshot().save(caminho)
+        print(f"    [evidência] Screenshot salvo em: {caminho}")
+    except Exception as erro:
+        print(f"    [evidência] Falha ao salvar screenshot: {erro}")
+
+
 def classificar_login(texto):
     """
     Classifica o resultado do login a partir do texto lido na tela.
@@ -556,29 +625,86 @@ def realizar_login(usuario):
     return classificar_login(texto)
 
 
-# Mensagem registrada no relatório quando o clique em "Sair" falha.
+# Mensagens registradas no relatório quando o logout falha.
 ERRO_BOTAO_SAIR = ("Erro no Login: Impossível localizar ou clicar no botão "
                    "de Sair na coordenada indicada")
+ERRO_SAIR_BLOQUEADO = ("Falha intermitente ao sair: Botão inativo ou "
+                       "bloqueado no estado atual")
 
 
 def realizar_logout():
     """
     ETAPA 3 (continuação) — Efetua o logout clicando no botão "Sair".
 
-    Opera no estado atual da página (sem navegação ou reload). Retorna True
-    se o clique foi executado; False se a interação falhou — o chamador
-    registra ERRO_BOTAO_SAIR no relatório e segue para o próximo usuário.
-    """
-    try:
-        # 9) Clica direto no botão "Sair".
-        clicar(BOTAO_SAIR_X, BOTAO_SAIR_Y)
-    except Exception as erro:
-        print(f"[ERRO] {ERRO_BOTAO_SAIR} ({erro})")
-        return False
+    Robusto contra falhas intermitentes:
+      1. Verifica por OCR se o botão "Sair" está VISÍVEL na coordenada antes
+         de clicar (um loader/overlay/modal pode estar cobrindo o botão).
+      2. Se não estiver na coordenada fixa, tenta localizá-lo dinamicamente
+         na tela inteira (o layout pode variar entre estados de login).
+      3. Após o clique, CONFIRMA que a tela mudou de estado (não há mais
+         sinais de sessão logada); se o clique não surtiu efeito (condição
+         de corrida), aguarda e re-tenta até LOGOUT_TENTATIVAS vezes.
+      4. Esgotadas as tentativas, salva um screenshot como evidência e
+         desiste — SEM navegação ou reload (o chamador registra o erro no
+         relatório e avança para o próximo usuário).
 
-    # 10) Aguarda o retorno para a tela inicial de login.
-    time.sleep(TEMPO_APOS_LOGOUT)
-    return True
+    Retorna None em caso de sucesso, ou a mensagem de erro a registrar.
+    """
+    ocr_disponivel = configurar_ocr()
+    clicou_alguma_vez = False
+
+    for tentativa in range(1, LOGOUT_TENTATIVAS + 1):
+        try:
+            alvo = (BOTAO_SAIR_X, BOTAO_SAIR_Y)
+
+            if ocr_disponivel:
+                # 1) Verificação de visibilidade na coordenada fixa.
+                regiao = texto_na_regiao(BOTAO_SAIR_X, BOTAO_SAIR_Y)
+                if regiao is not None and "sair" not in regiao:
+                    # 2) Não visível ali: tenta localizar o botão na tela.
+                    achado = localizar_texto_na_tela("sair")
+                    if achado:
+                        alvo = achado
+                        print(f"    [logout {tentativa}/{LOGOUT_TENTATIVAS}] "
+                              f"Botão 'Sair' localizado dinamicamente em "
+                              f"X={alvo[0]}, Y={alvo[1]}.")
+                    else:
+                        print(f"    [logout {tentativa}/{LOGOUT_TENTATIVAS}] "
+                              f"Botão 'Sair' não visível (loader/overlay?). "
+                              f"Aguardando...")
+                        time.sleep(TEMPO_ENTRE_TENTATIVAS)
+                        continue
+
+            # 3) Clica no alvo (coordenada fixa ou posição localizada).
+            clicar(alvo[0], alvo[1])
+            clicou_alguma_vez = True
+            time.sleep(TEMPO_APOS_LOGOUT)
+
+            # 4) Confirma o efeito do clique. Sem OCR não há como verificar:
+            #    mantém o comportamento anterior (assume que saiu).
+            if not ocr_disponivel:
+                return None
+            texto = ler_tela(rotulo_debug=f"logout_tentativa_{tentativa}")
+            if texto is None or not any(t in texto for t in TEXTOS_LOGIN_OK):
+                return None  # logout concluído: tela sem sinais de logado
+
+            print(f"    [logout {tentativa}/{LOGOUT_TENTATIVAS}] Clique sem "
+                  f"efeito (tela continua logada). Re-tentando...")
+            time.sleep(TEMPO_ENTRE_TENTATIVAS)
+
+        except Exception as erro:
+            print(f"    [logout {tentativa}/{LOGOUT_TENTATIVAS}] Erro no "
+                  f"clique: {erro}")
+            time.sleep(TEMPO_ENTRE_TENTATIVAS)
+
+    # Esgotou as tentativas: evidência em disco e erro específico — sem
+    # recarregar a página, para não entrar em loop.
+    salvar_evidencia_falha("logout_falha")
+    if clicou_alguma_vez:
+        print(f"[ERRO] {ERRO_SAIR_BLOQUEADO}")
+        return ERRO_SAIR_BLOQUEADO
+    print(f"[ERRO] {ERRO_BOTAO_SAIR}")
+    return ERRO_BOTAO_SAIR
 
 
 # ===========================================================================
@@ -666,11 +792,13 @@ def executar_automacao(limite=LIMITE_USUARIOS):
             print(f"    → Status: {status}")
 
             # Se entrou com sucesso, tenta o logout no estado atual da página
-            # (sem navegação/reload). Se o clique em "Sair" falhar, registra o
-            # erro no relatório e segue direto para o próximo usuário.
+            # (sem navegação/reload). Em caso de falha, realizar_logout()
+            # retorna a mensagem específica do erro para o relatório e o
+            # fluxo segue direto para o próximo usuário.
             if status == "Login realizado com sucesso":
-                if not realizar_logout():
-                    status = ERRO_BOTAO_SAIR
+                erro_logout = realizar_logout()
+                if erro_logout:
+                    status = erro_logout
 
         except pyautogui.FailSafeException:
             # Usuário acionou o fail-safe — abortamos toda a automação.
