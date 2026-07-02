@@ -556,45 +556,29 @@ def realizar_login(usuario):
     return classificar_login(texto)
 
 
+# Mensagem registrada no relatório quando o clique em "Sair" falha.
+ERRO_BOTAO_SAIR = ("Erro no Login: Impossível localizar ou clicar no botão "
+                   "de Sair na coordenada indicada")
+
+
 def realizar_logout():
     """
-    ETAPA 3 (continuação) — Efetua o logout e retorna à tela de login.
+    ETAPA 3 (continuação) — Efetua o logout clicando no botão "Sair".
 
-    Dá um único clique direto no botão "Sair" (BOTAO_SAIR_X/Y). Após o clique,
-    o site retorna sozinho para a tela inicial de login, pronta para o próximo
-    usuário. Eventual erro é apenas registrado (não interrompe o loop).
+    Opera no estado atual da página (sem navegação ou reload). Retorna True
+    se o clique foi executado; False se a interação falhou — o chamador
+    registra ERRO_BOTAO_SAIR no relatório e segue para o próximo usuário.
     """
     try:
         # 9) Clica direto no botão "Sair".
         clicar(BOTAO_SAIR_X, BOTAO_SAIR_Y)
     except Exception as erro:
-        # Se o clique falhar, força o reload da URL como fallback garantido,
-        # evitando deixar a sessão anterior ativa para o próximo usuário.
-        print(f"[AVISO] Falha ao tentar logout: {erro}. Forçando reload da URL.")
-        voltar_tela_inicial()
+        print(f"[ERRO] {ERRO_BOTAO_SAIR} ({erro})")
+        return False
 
     # 10) Aguarda o retorno para a tela inicial de login.
     time.sleep(TEMPO_APOS_LOGOUT)
-
-
-def voltar_tela_inicial():
-    """
-    Garante que o navegador esteja de volta na tela inicial de login.
-
-    Recarrega a URL para um estado limpo antes do próximo usuário. Só age se
-    o Chrome estiver em foco (senão o Ctrl+L/digitação iria para o app errado).
-    """
-    if not garantir_chrome_em_foco():
-        print("[AVISO] Chrome não está em foco; não foi possível recarregar a "
-              "tela de login.")
-        return
-
-    # Foca a barra de endereços (Ctrl+L), digita a URL e pressiona Enter.
-    pyautogui.hotkey("ctrl", "l")
-    time.sleep(0.3)
-    digitar_texto(URL_SITE, pausa=0.3)
-    pyautogui.press("enter")
-    time.sleep(TEMPO_CARREGAMENTO_SITE)
+    return True
 
 
 # ===========================================================================
@@ -681,12 +665,12 @@ def executar_automacao(limite=LIMITE_USUARIOS):
             status = realizar_login(usuario)
             print(f"    → Status: {status}")
 
-            # Se entrou com sucesso, faz logout; caso contrário, volta à tela.
+            # Se entrou com sucesso, tenta o logout no estado atual da página
+            # (sem navegação/reload). Se o clique em "Sair" falhar, registra o
+            # erro no relatório e segue direto para o próximo usuário.
             if status == "Login realizado com sucesso":
-                realizar_logout()
-            else:
-                # Login falhou (senha/usuário): garante tela inicial limpa.
-                voltar_tela_inicial()
+                if not realizar_logout():
+                    status = ERRO_BOTAO_SAIR
 
         except pyautogui.FailSafeException:
             # Usuário acionou o fail-safe — abortamos toda a automação.
@@ -700,25 +684,17 @@ def executar_automacao(limite=LIMITE_USUARIOS):
             break
 
         except JanelaErradaError as erro:
-            # Chrome perdeu o foco no meio da digitação: interrompe este usuário
-            # sem digitar em lugar errado e tenta recuperar a tela.
+            # Chrome perdeu o foco no meio da digitação: interrompe este
+            # usuário sem digitar em lugar errado e segue para o próximo.
             print(f"[ERRO] {erro}")
             status = "Janela incorreta"
-            try:
-                voltar_tela_inicial()
-            except Exception:
-                pass
 
         except Exception as erro:
-            # Qualquer outra exceção: registra COM traceback e CONTINUA.
+            # Qualquer outra exceção: registra COM traceback e CONTINUA
+            # para o próximo usuário (sem navegação/reload).
             print(f"[ERRO] Exceção inesperada: {erro}")
             traceback.print_exc()
             status = "Erro inesperado"
-            # Tenta recuperar o estado voltando à tela inicial.
-            try:
-                voltar_tela_inicial()
-            except Exception:
-                pass
 
         # Registra o resultado deste usuário no relatório.
         resultados.append({
